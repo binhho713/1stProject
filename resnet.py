@@ -221,7 +221,7 @@ class ResNet(nn.Module):
 #ResNet to predict: NEED MODIFYING OUTPUT LAYER!!
 class ResNet_predictor(nn.Module):
 
-    def __init__(self, block, layers, emb_dim=512, num_classes=8, zero_init_residual=False,
+    def __init__(self, block, layers, emb_dim=512, num_classes=10, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet_predictor, self).__init__()
@@ -322,7 +322,7 @@ class ResNet_predictor(nn.Module):
 #Resnet to seperate time series: NEED MODIFYING OUTPUT LAYER!!
 class ResNet_seprator(nn.Module):
 
-    def __init__(self, block, layers, num_classes=8, zero_init_residual=False,
+    def __init__(self, block, layers, num_classes=10, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet_seprator, self).__init__()

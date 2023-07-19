@@ -62,7 +62,7 @@ generator = Generator()
 if torch.cuda.is_available():
     print ("use cuda")
     generator = generator.cuda()
-generator.load_state_dict(torch.load(""))
+generator.load_state_dict(torch.load("models/G-180.model"))
 generator.eval()
 
 #Init seperator and predictor
@@ -96,7 +96,6 @@ def saveModel():
     torch.save(model.state_dict(), path)
 
 check_freq = 100
-all_label_acc = []
 
 cnt = 0
 #----------
@@ -132,11 +131,13 @@ for _epoch_ in range(10000):
             label_acc = (np.sum(eqn) == truth_labels.size(0)).astype("float32")
 
             #generate image
-            gen_img = generator(z.view(-1,100), gen_label)
+            gen_img = generator(z.view(-1,100), gen_label) #bs*10, 1, 32, 32
             gen_mix = gen_imgs.permute(1, 2, 3, 0) * label_distribution.view(-1)
-            gen_mix = gen_mix.view(1, 32, 32, batch_size * 16, 2, 4)
-            gen_mix = torch.sum(gen_mix, dim=5)  # avg by distribution 1, 32, 32, bs*16, 2
-            gen_img_demix = gen_mix.permute(3, 4, 0, 1, 2)  # bs*16, 2, 32, 32 #only used for visualization
+            gen_mix = gen_mix.view(1, 32, 32, batch_size, 10)
+            gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs
+            gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs, 1, 32, 32 #only used for visualization
+
+            #need change
             gen_mix = torch.max(gen_mix, dim=4)[0]
             gen_mix = gen_mix.permute(3, 0, 1, 2).view(-1, 32, 32)  # bs * 16, 32, 32
 

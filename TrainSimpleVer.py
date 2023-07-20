@@ -25,7 +25,7 @@ n_classes = 10
 img_shape = (1, 32, 32)
 img_size = 32
 
-#Generator to reconstruct time series
+#Generator to reconstruct input
 class Generator(nn.Module):
     def __init__(self):
         super(Generator, self).__init__()
@@ -72,7 +72,7 @@ pred = resnet18(predictor=True)
 #Load data
 time_series = np.load("")
 time_series = np.reshape(time_series, ( -1, 1, 32, 32))
-n_timeSeries = time_series.size(0)
+n_timeSeries = len(time_series)
 
 #Entropy function
 def entropy(x):
@@ -92,12 +92,15 @@ def k_lagerst(input, k):
 
 # Function to save the model
 def saveModel():
-    path = "./myFirstModel.pth"
+    path = "./models.pth"
     torch.save(model.state_dict(), path)
 
 check_freq = 100
-
+ts_mix_lst = []
+running_label_acc = 0
+running_loss = 0
 cnt = 0
+
 #----------
 # Training
 #----------
@@ -110,23 +113,23 @@ for _epoch_ in range(10000):
 
         ts_mix_lst.append(ts_mix)
 
-        if (len(s_mix_lst) == batch_size):
-            s_mix = np.concatenate(s_mix_lst, axis=0)  # bs 1, 32, 32
-            s_mix = Variable(torch.tensor(s_mix).float(), requires_grad=False)
+        if (len(ts_mix_lst) == batch_size):
+            ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs, 1, 32, 32
+            ts_mix = Variable(torch.tensor(ts_mix).float(), requires_grad=False)
 
             if use_cuda:
-                s_mix = s_mix.cuda()
+                ts_mix = ts_mix.cuda()
 
             labels_distribution = pred(ts_mix)
 
             if(use_cuda):
-                z = sep(torch.tensor(ts_mix.reshape(1, 32, 32)).float()).cuda()
+                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda()
             else:
-                z = sep(torch.tensor(ts_mix.reshape(1, 32, 32)).float())
+                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float())
 
             optimizer = torch.optim.Adam(list(pred.parameters()) + list(sep.parameters()), lr=lr)
 
-            labels = k_lagerst(labels_distribution, 2)
+            labels = k_lagerst(labels_distribution, truth_labels.size(0))
             eqn = np.equal(labels, truth_labels).astype("int")
             label_acc = (np.sum(eqn) == truth_labels.size(0)).astype("float32")
 
@@ -136,10 +139,7 @@ for _epoch_ in range(10000):
             gen_mix = gen_mix.view(1, 32, 32, batch_size, 10)
             gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs
             gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs, 1, 32, 32 #only used for visualization
-
-            #need change
-            gen_mix = torch.max(gen_mix, dim=4)[0]
-            gen_mix = gen_mix.permute(3, 0, 1, 2).view(-1, 32, 32)  # bs * 16, 32, 32
+            gen_mix = gen_mix.view(-1, 32, 32)  # bs, 1, 32, 32
 
             #reconstruct loss
             cri = torch.nn.L1Loss()
@@ -159,13 +159,19 @@ for _epoch_ in range(10000):
 
             s_mix_lst = []
             running_label_acc += label_acc
-            running_loss = loss.item()
+            running_loss += scale_recon * loss.item()
             cnt += 1
 
             #save model
             if (cnt % check_freq == 0):
+                print("#puzzle = %d, sudoku_acc = %f, label_acc = %f, recon_loss = %f" % (
+                cnt * batch_size, running_label_acc / cnt, running_loss / cnt))
+
                 save_model(pred, pred_path)
                 save_model(sep, sep_path)
+
+                running_label_acc = 0
+                running_loss = 0
                 cnt = 0
 
 

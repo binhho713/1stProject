@@ -164,7 +164,7 @@ for _epoch_ in range(10000):
 
             #save model
             if (cnt % check_freq == 0):
-                print("#puzzle = %d, sudoku_acc = %f, label_acc = %f, recon_loss = %f" % (
+                print("#data = %d, running_label_acc = %f, running_loss = %f" % (
                 cnt * batch_size, running_label_acc / cnt, running_loss / cnt))
 
                 save_model(pred, pred_path)

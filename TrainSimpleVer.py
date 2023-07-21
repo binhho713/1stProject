@@ -69,10 +69,20 @@ generator.eval()
 sep = resnet18(predictor=False)
 pred = resnet18(predictor=True)
 
+if use_cuda:
+    sep = sep.cuda()
+    pred = pred.cuda()
+    print("use_cuda")
+
 #Load data
-time_series = np.load("")
-time_series = np.reshape(time_series, ( -1, 1, 32, 32))
+ts1 = np.load("./4by4.npy") #100, 16, 1, 32, 32
+ts2 = np.load("./4by4_5678.npy") #100, 16, 1, 32, 32
+time_series = np.maximum(ts1, ts2) #100, 16, 1, 32, 32
 n_timeSeries = len(time_series)
+
+ls1 = np.load("./4by4_labels.npy") #100, 16, 1
+ls2 = np.load("./4by4_5678_labels.npy") #100, 16, 1
+truth_labels_list = np.concatenate(ls1, ls2, axis = 1) #100, 16, 2
 
 #Entropy function
 def entropy(x):
@@ -95,11 +105,15 @@ def saveModel():
     path = "./models.pth"
     torch.save(model.state_dict(), path)
 
+pred_path = "./models/pred.model-9992"
+sep_path = "./models/sep.model-9992"
+
 check_freq = 100
 ts_mix_lst = []
 running_label_acc = 0
 running_loss = 0
 cnt = 0
+lr = 0.0001
 
 #----------
 # Training
@@ -108,10 +122,10 @@ for _epoch_ in range(10000):
 
     for idx in range(n_timeSeries):
 
-        ts_mix = time_series[idx]
-        ts_mix = np.reshape(ts_mix, (1, 32, 32))
-
+        ts_mix = time_series[idx] #16, 1, 32, 32
         ts_mix_lst.append(ts_mix)
+        
+        truth_labels = truth_labels_list[idx] #16, 2
 
         if (len(ts_mix_lst) == batch_size):
             ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs, 1, 32, 32
@@ -120,18 +134,18 @@ for _epoch_ in range(10000):
             if use_cuda:
                 ts_mix = ts_mix.cuda()
 
-            labels_distribution = pred(ts_mix)
+            labels_distribution = pred(ts_mix) #bs, 10
 
             if(use_cuda):
-                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda()
+                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda() #bs, 1, 10, 100
             else:
                 z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float())
 
             optimizer = torch.optim.Adam(list(pred.parameters()) + list(sep.parameters()), lr=lr)
 
-            labels = k_lagerst(labels_distribution, truth_labels.size(0))
+            labels = k_lagerst(labels_distribution, truth_labels.size(1))
             eqn = np.equal(labels, truth_labels).astype("int")
-            label_acc = (np.sum(eqn) == truth_labels.size(0)).astype("float32")
+            label_acc = (np.sum(eqn) == truth_labels.size(1)).astype("float32")
 
             #generate image
             gen_img = generator(z.view(-1,100), gen_label) #bs*10, 1, 32, 32
@@ -139,12 +153,12 @@ for _epoch_ in range(10000):
             gen_mix = gen_mix.view(1, 32, 32, batch_size, 10)
             gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs
             gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs, 1, 32, 32 #only used for visualization
-            gen_mix = gen_mix.view(-1, 32, 32)  # bs, 1, 32, 32
+            gen_mix = gen_mix.view(-1, 32, 32)  # bs, 32, 32
 
             #reconstruct loss
             cri = torch.nn.L1Loss()
-            loss_cre = cri(ts_mix.view(-1, 32, 32), gen_img)
-            loss_cre /= (1.0 * labels_distribution.size(0))
+            loss_rec = cri(ts_mix.view(-1, 32, 32), gen_img)
+            loss_rec /= (1.0 * labels_distribution.size(0))
 
             #k_sparity constrain
             c = np.log(2) - 0.001
@@ -152,20 +166,20 @@ for _epoch_ in range(10000):
 
             scale_recon = 0.001
 
-            loss = scale_recon*loss_mix + 0.01*k_sparity
+            loss = scale_recon*loss_rec + 0.01*k_sparity
             optimizer.zero_grad()
             loss.backward(retain_graph=True)
             optimizer.step()
 
             s_mix_lst = []
             running_label_acc += label_acc
-            running_loss += scale_recon * loss.item()
+            running_rec_loss += scale_recon * loss_rec.item()
             cnt += 1
 
             #save model
             if (cnt % check_freq == 0):
                 print("#data = %d, running_label_acc = %f, running_loss = %f" % (
-                cnt * batch_size, running_label_acc / cnt, running_loss / cnt))
+                cnt * batch_size, running_label_acc / cnt, running_rec_loss / cnt))
 
                 save_model(pred, pred_path)
                 save_model(sep, sep_path)

@@ -48,7 +48,7 @@ class BasicBlock(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-    def forward(self, x: Tensor) ->Tensor:
+    def forward(self, x):
         identity = x
 
         out = self.conv1(x)
@@ -94,7 +94,7 @@ class Bottelneck(nn.Module):
         self.downsample = downsample
         self.stride = stride
 
-    def forward(self, x: Tensor) ->Tensor:
+    def forward(self, x):
         identity = x
 
         out = self.conv1(x)
@@ -411,7 +411,7 @@ class ResNet_seprator(nn.Module):
         x = self.avgpool(x)
         x = x.reshape(x.size(0), -1)
         x = self.fc(x)
-        x = x.view(-1, 2, 4, 100)
+        x = x.view(-1, 1, 10, 100)
 
         return x
 

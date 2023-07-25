@@ -24,6 +24,8 @@ latent_dim = 100
 n_classes = 10
 img_shape = (1, 32, 32)
 img_size = 32
+nums = 10
+use_cuda = torch.cuda.is_available()
 
 #Generator to reconstruct input
 class Generator(nn.Module):
@@ -75,14 +77,18 @@ if use_cuda:
     print("use_cuda")
 
 #Load data
-ts1 = np.load("./4by4.npy") #100, 16, 1, 32, 32
-ts2 = np.load("./4by4_5678.npy") #100, 16, 1, 32, 32
-time_series = np.maximum(ts1, ts2) #100, 16, 1, 32, 32
+ts1 = np.load("./4by4.npy") #10000, 16, 1, 32, 32
+ts2 = np.load("./4by4_5678.npy") #10000, 16, 1, 32, 32
+time_series = np.maximum(ts1, ts2) #10000, 16, 1, 32, 32
 n_timeSeries = len(time_series)
 
-ls1 = np.load("./4by4_labels.npy") #100, 16, 1
-ls2 = np.load("./4by4_5678_labels.npy") #100, 16, 1
-truth_labels_list = np.concatenate(ls1, ls2, axis = 1) #100, 16, 2
+ls1 = np.load("./4by4_labels.npy") #10000, 16
+ls2 = np.load("./4by4_5678_labels.npy") #10000, 16
+truth_labels_list = np.concatenate((ls1.reshape(-1, 16, 1), ls2.reshape(-1, 16, 1)), axis = 2) #100, 16, 2
+
+gen_labels = torch.LongTensor(np.arange(16 * nums * batch_size, dtype = "int32") % nums)
+if use_cuda:
+    gen_labels =  gen_labels.cuda()
 
 #Entropy function
 def entropy(x):
@@ -90,10 +96,11 @@ def entropy(x):
 
 #Function to find k lagerst numbers
 def k_lagerst(input, k):
-    z = np.argsort(input)[::-1]
-    output = []
-    for i in range(k):
-        output.append(z[i])
+    z = np.argsort(input, axis = 1)
+    output = np.ndarray(shape = (len(input),k))
+    for i in range(len(input)):
+        for j in range(k):
+            output[i][-j-1] = z[i][-j-1]
     return output
 
 #All different constraints
@@ -109,10 +116,6 @@ pred_path = "./models/pred.model-9992"
 sep_path = "./models/sep.model-9992"
 
 check_freq = 100
-ts_mix_lst = []
-running_label_acc = 0
-running_loss = 0
-cnt = 0
 lr = 0.0001
 
 #----------
@@ -120,49 +123,58 @@ lr = 0.0001
 #----------
 for _epoch_ in range(10000):
 
+    ts_mix_lst = []
+    labels_list = []
+    running_label_acc = 0
+    running_loss = 0
+    cnt = 0
+
     for idx in range(n_timeSeries):
 
         ts_mix = time_series[idx] #16, 1, 32, 32
         ts_mix_lst.append(ts_mix)
         
         truth_labels = truth_labels_list[idx] #16, 2
+        labels_list.append(truth_labels)
 
         if (len(ts_mix_lst) == batch_size):
-            ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs, 1, 32, 32
+            ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs*16, 1, 32, 32
             ts_mix = Variable(torch.tensor(ts_mix).float(), requires_grad=False)
-
+            print(ts_mix.shape)
             if use_cuda:
                 ts_mix = ts_mix.cuda()
 
-            labels_distribution = pred(ts_mix) #bs, 10
-
+            labels_distribution = pred(ts_mix) #bs*16, 10
             if(use_cuda):
-                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda() #bs, 1, 10, 100
+                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda() #bs*16, 1, 10, 100
             else:
                 z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float())
 
             optimizer = torch.optim.Adam(list(pred.parameters()) + list(sep.parameters()), lr=lr)
 
-            labels = k_lagerst(labels_distribution, truth_labels.size(1))
-            eqn = np.equal(labels, truth_labels).astype("int")
-            label_acc = (np.sum(eqn) == truth_labels.size(1)).astype("float32")
+            labels = labels_distribution.cpu().data.numpy()
+            labels = k_lagerst(labels, 2)
+            ll = np.reshape(labels_list,(-1, 2)) #bs*16, 2
+            eqn = np.equal(labels, ll).astype("int").reshape(batch_size, 16, 2)
+            label_acc = (np.sum(eqn) == 2).astype("float32")
 
             #generate image
-            gen_img = generator(z.view(-1,100), gen_label) #bs*10, 1, 32, 32
-            gen_mix = gen_imgs.permute(1, 2, 3, 0) * label_distribution.view(-1)
-            gen_mix = gen_mix.view(1, 32, 32, batch_size, 10)
-            gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs
-            gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs, 1, 32, 32 #only used for visualization
-            gen_mix = gen_mix.view(-1, 32, 32)  # bs, 32, 32
+            gen_img = generator(z.view(-1,100), gen_labels) #bs*16*10, 1, 32, 32
+            gen_mix = gen_img.permute(1, 2, 3, 0) * labels_distribution.view(-1)
+            gen_mix = gen_mix.view(1, 32, 32, batch_size*16, 10)
+            gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs*16
+            gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs*16, 1, 32, 32 #only used for visualization
+            gen_mix = gen_mix.view(-1, 1, 32, 32)  # bs*16, 32, 32
 
             #reconstruct loss
             cri = torch.nn.L1Loss()
-            loss_rec = cri(ts_mix.view(-1, 32, 32), gen_img)
+            loss_rec = cri(ts_mix.view(-1, 1, 32, 32), gen_mix)
             loss_rec /= (1.0 * labels_distribution.size(0))
 
             #k_sparity constrain
             c = np.log(2) - 0.001
-            k_sparity = np.maximum(entropy(labels_distribution),c)
+            c = torch.tensor(c).float()
+            k_sparity = torch.maximum(entropy(labels_distribution),c).float()
 
             scale_recon = 0.001
 
@@ -171,9 +183,10 @@ for _epoch_ in range(10000):
             loss.backward(retain_graph=True)
             optimizer.step()
 
-            s_mix_lst = []
+            ts_mix_lst = []
+            labels_list = []
             running_label_acc += label_acc
-            running_rec_loss += scale_recon * loss_rec.item()
+            running_loss += scale_recon * loss_rec.item()
             cnt += 1
 
             #save model

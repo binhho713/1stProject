@@ -27,6 +27,7 @@ img_size = 32
 nums = 10
 use_cuda = torch.cuda.is_available()
 
+
 #Generator to reconstruct input
 class Generator(nn.Module):
     def __init__(self):
@@ -103,13 +104,13 @@ def k_lagerst(input, k):
             output[i][-j-1] = z[i][-j-1]
     return output
 
+
 #All different constraints
 #def gen_alldiff_constraints(nums, batch_size):
 #return all_diffs
 
 # Function to save the model
-def saveModel():
-    path = "./models.pth"
+def save_model(model, path):
     torch.save(model.state_dict(), path)
 
 pred_path = "./models/pred.model-9992"
@@ -127,6 +128,7 @@ for _epoch_ in range(10000):
     labels_list = []
     running_label_acc = 0
     running_loss = 0
+    k_loss = 0
     cnt = 0
 
     for idx in range(n_timeSeries):
@@ -140,7 +142,6 @@ for _epoch_ in range(10000):
         if (len(ts_mix_lst) == batch_size):
             ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs*16, 1, 32, 32
             ts_mix = Variable(torch.tensor(ts_mix).float(), requires_grad=False)
-            print(ts_mix.shape)
             if use_cuda:
                 ts_mix = ts_mix.cuda()
 
@@ -155,30 +156,51 @@ for _epoch_ in range(10000):
             labels = labels_distribution.cpu().data.numpy()
             labels = k_lagerst(labels, 2)
             ll = np.reshape(labels_list,(-1, 2)) #bs*16, 2
-            eqn = np.equal(labels, ll).astype("int").reshape(batch_size, 16, 2)
-            label_acc = (np.sum(eqn) == 2).astype("float32")
+            eqn = []
+            for i in range(batch_size*16):
+                h = []
+                for j in range(2):
+                    if labels[i][j] in ll[i]:
+                        h.append(1)
+                    else:
+                        h.append(0)
+                eqn.append(h)
+
+            label_acc = (np.sum(eqn)/(batch_size*16*2)).astype("float32")
 
             #generate image
             gen_img = generator(z.view(-1,100), gen_labels) #bs*16*10, 1, 32, 32
-            gen_mix = gen_img.permute(1, 2, 3, 0) * labels_distribution.view(-1)
-            gen_mix = gen_mix.view(1, 32, 32, batch_size*16, 10)
-            gen_mix = torch.sum(gen_mix, dim=4)  # avg by distribution 1, 32, 32, bs*16
-            gen_img_demix = gen_mix.permute(3, 0, 1, 2)  # bs*16, 1, 32, 32 #only used for visualization
-            gen_mix = gen_mix.view(-1, 1, 32, 32)  # bs*16, 32, 32
+            gen_mix = gen_img.permute(1, 2, 3, 0) * labels_distribution.view(-1)#1,32,32,bs*16*10
+            gen_mix = gen_mix.permute(3, 0, 1, 2).view(batch_size*16,10,1,32,32) # bs*16, 10, 1, 32, 32
+            h = []
+            array = gen_mix.detach().cpu().numpy()
+            for i in range(len(array)):
+                copy = []
+                for j in range(2):
+                    copy.append(array[i][int(labels[i][j])])
+                h.append(copy)
+            gen_mix = torch.tensor(np.array(h)).float().cuda()
+            gen_mix = torch.reshape(gen_mix, (batch_size*16, 2, 1, 32, 32))
+            #arr = gen_mix.detach().cpu().numpy()
+            gen_mix = torch.max(gen_mix.permute( 2, 3, 4, 0, 1), dim=4)[0] # 1, 32, 32, bs*16
+            gen_mix = gen_mix.permute(3, 0, 1, 2).view(-1, 1, 32, 32)  # bs*16, 1, 32, 32
+            arr5 = ts_mix.detach().cpu().numpy()
+            arr3 = gen_mix.detach().cpu().numpy()
 
             #reconstruct loss
+            loss_rec = 0
             cri = torch.nn.L1Loss()
             loss_rec = cri(ts_mix.view(-1, 1, 32, 32), gen_mix)
-            loss_rec /= (1.0 * labels_distribution.size(0))
+            #loss_rec /= (1.0 * labels_distribution.size(0))
 
             #k_sparity constrain
-            c = np.log(2) - 0.001
+            c = np.log(2) - 1e-6
             c = torch.tensor(c).float()
             k_sparity = torch.maximum(entropy(labels_distribution),c).float()
 
-            scale_recon = 0.001
+            #scale_recon = 0.001
 
-            loss = scale_recon*loss_rec + 0.01*k_sparity
+            loss = loss_rec + 0.1*k_sparity
             optimizer.zero_grad()
             loss.backward(retain_graph=True)
             optimizer.step()
@@ -186,13 +208,14 @@ for _epoch_ in range(10000):
             ts_mix_lst = []
             labels_list = []
             running_label_acc += label_acc
-            running_loss += scale_recon * loss_rec.item()
+            running_loss += loss_rec.item()
+            k_loss += k_sparity.item()
             cnt += 1
 
             #save model
             if (cnt % check_freq == 0):
-                print("#data = %d, running_label_acc = %f, running_loss = %f" % (
-                cnt * batch_size, running_label_acc / cnt, running_rec_loss / cnt))
+                print("#epoch = %d, data = %d, running_label_acc = %f, running_loss = %f, k_loss= %f" % (
+                _epoch_, cnt * batch_size, running_label_acc / cnt, running_loss / cnt, k_loss/cnt))
 
                 save_model(pred, pred_path)
                 save_model(sep, sep_path)

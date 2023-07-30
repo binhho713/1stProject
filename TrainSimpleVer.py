@@ -104,11 +104,6 @@ def k_lagerst(input, k):
             output[i][-j-1] = z[i][-j-1]
     return output
 
-
-#All different constraints
-#def gen_alldiff_constraints(nums, batch_size):
-#return all_diffs
-
 # Function to save the model
 def save_model(model, path):
     torch.save(model.state_dict(), path)
@@ -184,8 +179,8 @@ for _epoch_ in range(10000):
             #arr = gen_mix.detach().cpu().numpy()
             gen_mix = torch.max(gen_mix.permute( 2, 3, 4, 0, 1), dim=4)[0] # 1, 32, 32, bs*16
             gen_mix = gen_mix.permute(3, 0, 1, 2).view(-1, 1, 32, 32)  # bs*16, 1, 32, 32
-            arr5 = ts_mix.detach().cpu().numpy()
-            arr3 = gen_mix.detach().cpu().numpy()
+            arr1 = ts_mix.detach().cpu().numpy() #array view đầu vào
+            arr2 = gen_mix.detach().cpu().numpy() #array view đầu ra
 
             #reconstruct loss
             loss_rec = 0

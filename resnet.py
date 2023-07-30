@@ -256,6 +256,7 @@ class ResNet_predictor(nn.Module):
         self.fc1 = nn.Linear(512 * block.expansion, num_classes)
         self.fc = nn.Linear(512 * block.expansion, emb_dim)
         self.sigmoid = torch.nn.Sigmoid()
+        self.softmax = torch.nn.Softmax(dim = 1)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -312,6 +313,7 @@ class ResNet_predictor(nn.Module):
         x = self.avgpool(x)
         x = x.reshape(x.size(0), -1)
         x1 = self.sigmoid(self.fc1(x))
+        #x1 = self.softmax(self.fc1(x))
         x_emb = self.fc(x)
 
         if not emb:

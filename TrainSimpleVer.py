@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-from resnet import *
+from encoder import *
 
 batch_size = 64
 latent_dim = 100
@@ -34,38 +34,39 @@ class Generator(nn.Module):
         super(Generator, self).__init__()
 
         self.label_emb = nn.Embedding(n_classes, n_classes)
+        self.ln = nn.Linear(n_classes, 8 * 8)
+        self.ln1 = nn.Linear(latent_dim, 8 * 8 * 128)
 
-        def block(in_feat, out_feat, normalize=True):
-            layers = [nn.Linear(in_feat, out_feat)]
-            if normalize:
-                layers.append(nn.BatchNorm1d(out_feat, 0.8))
-            layers.append(nn.LeakyReLU(0.2, inplace=True))
-            return layers
-
-        self.model = nn.Sequential(
-            *block(latent_dim + n_classes, 128, normalize=False),
-            *block(128, 256),
-            *block(256, 512),
-            *block(512, 1024),
-            nn.Linear(1024, int(np.prod(img_shape))),
-            nn.Tanh()
-        )
+        self.deconv1 = nn.ConvTranspose1d(129, 64, kernel_size=4, stride=4)
+        self.deconv2 = nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1)
+        self.deconv3 = nn.ConvTranspose1d(32, 1, kernel_size=4, stride=2, padding=1)
+        self.ln2 = nn.Linear(1024, 1024)
+        self.relu = nn.ReLU()
 
     def forward(self, noise, labels):
-        # Concatenate label embedding and image to produce input
-        #print ("label: " labels)
-        #print ("!!!!!!!!!!!!!!!1 ", self.label_emb(labels).size(), " ", noise.size())
-        gen_input = torch.cat((self.label_emb(labels), noise), -1)
-        img = self.model(gen_input)
-        img = img.view(img.size(0), *img_shape)
-        return img
+
+        x = self.ln1(noise)
+        x = torch.reshape(x, (-1, 128, 8*8))
+        y = self.label_emb(labels)
+        y = self.ln(y)
+        y = torch.reshape(y, (-1, 1, 8*8))
+        ts = torch.cat((x, y), 1)
+        ts = self.deconv1(ts)
+        ts = self.relu(ts)
+        ts = self.deconv2(ts)
+        ts = self.relu(ts)
+        ts = self.deconv3(ts)
+        ts = self.relu(ts)
+        ts = self.ln2(ts)
+
+        return ts
 
 #Init generator & load pretrained generative decoder
 generator = Generator()
 if torch.cuda.is_available():
     print ("use cuda")
     generator = generator.cuda()
-generator.load_state_dict(torch.load("models/G-180.model"))
+generator.load_state_dict(torch.load("models/G_ts-180.model"))
 generator.eval()
 
 #Init seperator and predictor
@@ -77,7 +78,60 @@ if use_cuda:
     pred = pred.cuda()
     print("use_cuda")
 
+#generate mix time series data:
+
+def generate_mix_ts():
+    x = np.load('base_ts.npy')
+    base_mix_ts = []
+    base_labels = []
+    mix_ts = []
+    labels = []
+    test_ts = []
+    test_labels = []
+
+    for i in range(len(x)):
+        for j in range(len(x)):
+            if j > i:
+                z = np.random.choice([-1, 1], size=2)
+                k1 = np.random.rand()
+                k2 = (1 - k1)
+                base_mix_ts.append(x[i] * k1 * z[0] + x[j] * k2 * z[1])
+                base_labels.append([i, j])
+
+    print(len(base_mix_ts), len(base_labels))
+
+    y = dict(mix_ts = base_mix_ts, labels = base_labels)
+    scipy.io.savemat('base_mix_ts.mat', y)
+
+    for i in range(len(base_mix_ts)):
+        h = np.random.normal(loc=0.0, scale=1.0, size=1000)
+        for j in range(1000):
+            t = base_mix_ts[i] * h[j]
+            noise = np.random.normal(loc=0.0, scale=0.04, size=1024)
+            t += noise
+            if j < 900:
+                mix_ts.append(t)
+                labels.append(base_labels[i])
+            else:
+                test_ts.append(t)
+                test_labels = (base_labels[i])
+
+    s = dict(mix_ts=mix_ts, labels=labels)
+    t = dict(mix_ts=test_ts, labels=test_labels)
+    scipy.io.savemat('mix_ts.mat', s)
+    scipy.io.savemat('test_ts.mat', t)
+
+generate_mix_ts()
+
 #Load data
+
+import scipy.io
+
+data = scipy.io.loadmat('mix_ts.mat')
+time_series = data['mix_ts']
+truth_labels_list = data['labels']
+n_timeSeries = len(time_series)
+"""
 ts1 = np.load("./4by4.npy") #10000, 16, 1, 32, 32
 ts2 = np.load("./4by4_5678.npy") #10000, 16, 1, 32, 32
 time_series = np.maximum(ts1, ts2) #10000, 16, 1, 32, 32
@@ -86,8 +140,8 @@ n_timeSeries = len(time_series)
 ls1 = np.load("./4by4_labels.npy") #10000, 16
 ls2 = np.load("./4by4_5678_labels.npy") #10000, 16
 truth_labels_list = np.concatenate((ls1.reshape(-1, 16, 1), ls2.reshape(-1, 16, 1)), axis = 2) #100, 16, 2
-
-gen_labels = torch.LongTensor(np.arange(16 * nums * batch_size, dtype = "int32") % nums)
+"""
+gen_labels = torch.LongTensor(np.arange(nums * batch_size, dtype = "int32") % nums)
 if use_cuda:
     gen_labels =  gen_labels.cuda()
 
@@ -104,6 +158,11 @@ def k_lagerst(input, k):
             output[i][-j-1] = z[i][-j-1]
     return output
 
+
+#All different constraints
+#def gen_alldiff_constraints(nums, batch_size):
+#return all_diffs
+
 # Function to save the model
 def save_model(model, path):
     torch.save(model.state_dict(), path)
@@ -112,7 +171,7 @@ pred_path = "./models/pred.model-9992"
 sep_path = "./models/sep.model-9992"
 
 check_freq = 100
-lr = 0.0001
+lr = 0.00001
 
 #----------
 # Training
@@ -128,31 +187,31 @@ for _epoch_ in range(10000):
 
     for idx in range(n_timeSeries):
 
-        ts_mix = time_series[idx] #16, 1, 32, 32
+        ts_mix = time_series[idx] #1, 1024
         ts_mix_lst.append(ts_mix)
         
-        truth_labels = truth_labels_list[idx] #16, 2
+        truth_labels = truth_labels_list[idx] #1, 2
         labels_list.append(truth_labels)
 
         if (len(ts_mix_lst) == batch_size):
-            ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs*16, 1, 32, 32
-            ts_mix = Variable(torch.tensor(ts_mix).float(), requires_grad=False)
+            ts_mix = np.concatenate(ts_mix_lst, axis=0)  # bs * 1024
+            ts_mix = Variable(torch.tensor(ts_mix.reshape(-1, 1, 1024)).float(), requires_grad=False) # bs, 1024
             if use_cuda:
                 ts_mix = ts_mix.cuda()
 
-            labels_distribution = pred(ts_mix) #bs*16, 10
+            labels_distribution = pred(ts_mix) #bs, 10
             if(use_cuda):
-                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float()).cuda() #bs*16, 1, 10, 100
+                z = sep(torch.tensor(ts_mix).float()).cuda() #bs, 1, 10, 100
             else:
-                z = sep(torch.tensor(ts_mix.reshape(-1, 1, 32, 32)).float())
+                z = sep(torch.tensor(ts_mix).float())
 
             optimizer = torch.optim.Adam(list(pred.parameters()) + list(sep.parameters()), lr=lr)
 
             labels = labels_distribution.cpu().data.numpy()
             labels = k_lagerst(labels, 2)
-            ll = np.reshape(labels_list,(-1, 2)) #bs*16, 2
+            ll = np.reshape(labels_list,(-1, 2)) #bs, 2
             eqn = []
-            for i in range(batch_size*16):
+            for i in range(batch_size):
                 h = []
                 for j in range(2):
                     if labels[i][j] in ll[i]:
@@ -161,31 +220,22 @@ for _epoch_ in range(10000):
                         h.append(0)
                 eqn.append(h)
 
-            label_acc = (np.sum(eqn)/(batch_size*16*2)).astype("float32")
+            label_acc = (np.sum(eqn)/(batch_size * 2)).astype("float32")
 
             #generate image
-            gen_img = generator(z.view(-1,100), gen_labels) #bs*16*10, 1, 32, 32
-            gen_mix = gen_img.permute(1, 2, 3, 0) * labels_distribution.view(-1)#1,32,32,bs*16*10
-            gen_mix = gen_mix.permute(3, 0, 1, 2).view(batch_size*16,10,1,32,32) # bs*16, 10, 1, 32, 32
-            h = []
-            array = gen_mix.detach().cpu().numpy()
-            for i in range(len(array)):
-                copy = []
-                for j in range(2):
-                    copy.append(array[i][int(labels[i][j])])
-                h.append(copy)
-            gen_mix = torch.tensor(np.array(h)).float().cuda()
-            gen_mix = torch.reshape(gen_mix, (batch_size*16, 2, 1, 32, 32))
-            #arr = gen_mix.detach().cpu().numpy()
-            gen_mix = torch.max(gen_mix.permute( 2, 3, 4, 0, 1), dim=4)[0] # 1, 32, 32, bs*16
-            gen_mix = gen_mix.permute(3, 0, 1, 2).view(-1, 1, 32, 32)  # bs*16, 1, 32, 32
-            arr1 = ts_mix.detach().cpu().numpy() #array view đầu vào
-            arr2 = gen_mix.detach().cpu().numpy() #array view đầu ra
+            gen_img = generator(z.view(-1,100), gen_labels) #bs*10, 1, 1024
+            arr1 = gen_img.detach().cpu().numpy()
+            gen_mix = gen_img.permute(1, 2, 0) * labels_distribution.view(-1)#1,1024,bs*10
+            gen_mix = gen_mix.permute(2, 0, 1).view(batch_size,10,1,1024) # bs, 10, 1, 1024
+            gen_mix = torch.sum(gen_mix, dim= 1) #bs, 1, 1024
+            arr4 = gen_mix.detach().cpu().numpy()
+            arr2 = ts_mix.detach().cpu().numpy()
+            arr3 = labels_distribution.detach().cpu().numpy()
 
             #reconstruct loss
             loss_rec = 0
             cri = torch.nn.L1Loss()
-            loss_rec = cri(ts_mix.view(-1, 1, 32, 32), gen_mix)
+            loss_rec = cri(ts_mix, gen_mix)
             #loss_rec /= (1.0 * labels_distribution.size(0))
 
             #k_sparity constrain

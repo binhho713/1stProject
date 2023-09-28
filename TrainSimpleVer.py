@@ -79,7 +79,6 @@ if use_cuda:
     print("use_cuda")
 
 #Load data
-
 import scipy.io
 
 data = scipy.io.loadmat('mix_ts.mat')

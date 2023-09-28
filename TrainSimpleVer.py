@@ -78,9 +78,53 @@ if use_cuda:
     pred = pred.cuda()
     print("use_cuda")
 
-#Load data
+#generate random mix_ts dataset for training & testing
 import scipy.io
 
+def generate_mix_ts():
+    x = np.load('base_ts.npy')
+    base_mix_ts = []
+    base_labels = []
+    mix_ts = []
+    labels = []
+    test_ts = []
+    test_labels = []
+
+    for i in range(len(x)):
+        for j in range(len(x)):
+            if j > i:
+                z = np.random.choice([-1, 1], size=2)
+                k1 = np.random.rand()
+                k2 = (1 - k1)
+                base_mix_ts.append(x[i] * k1 * z[0] + x[j] * k2 * z[1])
+                base_labels.append([i, j])
+
+    print(len(base_mix_ts), len(base_labels))
+
+    y = dict(mix_ts = base_mix_ts, labels = base_labels)
+    scipy.io.savemat('base_mix_ts.mat', y)
+
+    for i in range(len(base_mix_ts)):
+        h = np.random.normal(loc=0.0, scale=1.0, size=1000)
+        for j in range(1000):
+            t = base_mix_ts[i] * h[j]
+            noise = np.random.normal(loc=0.0, scale=0.04, size=1024)
+            t += noise
+            if j < 900:
+                mix_ts.append(t)
+                labels.append(base_labels[i])
+            else:
+                test_ts.append(t)
+                test_labels = (base_labels[i])
+
+    s = dict(mix_ts=mix_ts, labels=labels)
+    t = dict(mix_ts=test_ts, labels=test_labels)
+    scipy.io.savemat('mix_ts.mat', s)
+    scipy.io.savemat('test_ts.mat', t)
+
+#generate_mix_ts()
+
+#Load data
 data = scipy.io.loadmat('mix_ts.mat')
 data = np.concatenate((data['mix_ts'], data['labels']),axis=1)
 np.random.shuffle(data)

@@ -398,7 +398,7 @@ class ResNet_seprator(nn.Module):
                                        dilate=replace_stride_with_dilation[2])
         #self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.avgpool = nn.AdaptiveAvgPool1d(1)
-        self.fc = nn.Linear(512 * block.expansion, 100 * num_classes)
+        self.fc = nn.Linear(512 * block.expansion, 200 * num_classes)
 
         # self.rs1 = nn.Linear(512 * block.expansion, 100 * 2)
         # self.rs2 = nn.Linear(512 * block.expansion, 100 * 1)
@@ -467,7 +467,7 @@ class ResNet_seprator(nn.Module):
         x1 = self.fc(x)
         # x2 = self.rs1(x)
         # x2 = self.res2(x2)
-        x1 = x1.view(-1, 1, 171, 100)
+        x1 = x1.view(-1, 1, 171, 200)
         # x2 = x2.view(-1, 1, 1, 100)
 
         return x1

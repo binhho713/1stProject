@@ -1,23 +1,45 @@
 import scipy.io
 import numpy as np
-import matplotlib.pyplot as plt
 import torch as torch
+import scipy.stats.mstats as statm
+import pandas as pd
+import random
+import logging
+import time
+import itertools
 
-def generate_ts():
+def setup_logger(name, log_file, level=logging.INFO):
+    """Function to set up a logger with a file and console handler."""
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    handler = logging.FileHandler(log_file)        
+    handler.setFormatter(formatter)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.addHandler(handler)
+    logger.addHandler(console_handler)
+    
+    return logger
 
-    x = np.zeros((100, 1024))
+def generate_ts(size, length):
 
-    for i in range(100):
-        x[i] = np.random.normal(loc=0.0, scale=1.0, size=1024)
+    x = np.zeros((size, length))
 
-    np.save('base_ts_100.npy', x)
-    s = np.zeros((100 * 1000, 1025))
+    for i in range(size):
+        x[i] = np.random.normal(loc=0.0, scale=1.0, size=length)
+
+    np.save('base_ts_%s.npy' % size, x)
+    s = np.zeros((size * 1000, length))
     j = 0
     for i in range(len(s)):
-        h = np.random.normal(loc=0.0, scale=1.0, size=1000)
-        for k in range(1000):
+        h = np.random.normal(loc=0.0, scale=1.0, size=length)
+        for k in range(length):
             t = x[i]*h[k]
-            noise = np.random.normal(loc=0.0, scale=0.04, size = 1024)
+            noise = np.random.normal(loc=0.0, scale=0.04, size=length)
             t += noise
             l = i
             s[j] = np.concatenate((t, np.array([l])), axis=0)
@@ -25,17 +47,89 @@ def generate_ts():
 
     np.save('train_ts_100.npy', s)
 
-#generate_ts()
+def generate_train_ts(data, nametag, labels, s_or_r):
+    size = data.shape[0]
+    length = data.shape[1]
+    s = np.zeros((size * 1000, length + 1))
+    j = 0
+    l = []
+    x = statm.zscore(data, axis=1)
 
-def generate_mix_ts(x, nametag):
+    for i in range(size):
+        h = np.random.normal(loc=0.0, scale=1.0, size=1000)
+        for k in range(1000):
+            t = x[i]*h[k]
+            noise = np.random.normal(loc=0.0, scale=0.04, size=length)
+            t += noise
+            l = i
+            s[j] = np.concatenate((t, np.array([l])), axis=0)
+            #s[j] = t
+            #l.append(labels[i])
+            j += 1
 
+    if s_or_r:
+        np.save(nametag, s)
+    else:
+        return s, l
+
+def generate_train_ts_with_labels(input, labels, nametag, sample, l_opt, s_or_r):
+
+    x = statm.zscore(input, axis=0)
+    size = x.shape[0]
+    length = x.shape[1]
+    if l_opt:
+        s = np.zeros((size * sample, length + 3))
+    else:
+        s = np.zeros((size * sample, length))
+    j = 0
+    for i in range(size):
+        h = np.random.normal(loc=0.0, scale=1.0, size=sample)
+        for k in range(sample):
+            t = x[i]*h[k]
+            noise = np.random.normal(loc=0.0, scale=0.04, size=length)
+            t += noise
+            if l_opt:
+                l = labels[i]
+                s[j] = np.concatenate((t, np.array([l])[0]), axis=0)
+            else:
+                s[j] = t
+            j += 1
+
+    s = statm.zscore(s, axis=1)
+ 
+    if s_or_r:
+        np.save(nametag, s)
+    else:
+        return s
+
+def generate_mixture(x, k):
+    mixture = []
+    labels = []
+    indice = np.arange(0, len(x), 1)
+    arr = np.zeros((k, x.shape[1]))
+
+    for combo in itertools.combinations(indice, k):
+        for i in range(k):
+            arr[i] = x[int(combo[i])]
+        z = np.random.choice([-1, 1], size=k)
+        coef = np.random.rand(k)
+        coef *= z
+        coef /= sum(coef)
+        arr *= coef[:, np.newaxis]
+        mixture.append(sum(arr))
+        labels.append(combo)
+
+    return mixture, labels
+
+def generate_mix_ts(x, nametag, sample, train_ratio, l_opt, s_or_r):
     base_mix_ts = []
     base_labels = []
     mix_ts = []
     labels = []
     test_ts = []
     test_labels = []
-
+    
+    #generate base mixture
     for i in range(len(x)):
         for j in range(len(x)):
             if j > i:
@@ -45,26 +139,40 @@ def generate_mix_ts(x, nametag):
                 base_mix_ts.append(x[i] * k1 * z[0] + x[j] * k2 * z[1])
                 base_labels.append([i, j])
 
-    y = dict(mix_ts = base_mix_ts, labels = base_labels)
+    y = dict(mix_ts=base_mix_ts, labels=base_labels)
     scipy.io.savemat('base_mix_ts_%s.mat' % nametag, y)
 
+    #generate mixture samples
     for i in range(len(base_mix_ts)):
-        h = np.random.normal(loc=0.0, scale=1.0, size=1000)
-        for j in range(1000):
+        h = np.random.normal(loc=0.0, scale=1.0, size=sample)
+        for j in range(sample):
             t = base_mix_ts[i] * h[j]
-            noise = np.random.normal(loc=0.0, scale=0.04, size=1024)
+            noise = np.random.normal(loc=0.0, scale=0.04, size=(x.shape[1]))
             t += noise
-            if j < 900:
+            if j < sample * train_ratio:
                 mix_ts.append(t)
-                labels.append(base_labels[i])
+                if l_opt:
+                    labels.append(base_labels[i])
             else:
                 test_ts.append(t)
-                test_labels.append(base_labels[i])
-
-    s = dict(mix_ts=mix_ts, labels=labels)
-    t = dict(mix_ts=test_ts, labels=test_labels)
-    scipy.io.savemat('mix_ts_10_%s.mat' % nametag, s)
-    scipy.io.savemat('test_ts_10_%s.mat' % nametag, t)
+                if l_opt:
+                    test_labels.append(base_labels[i])
+	
+    if l_opt:
+    	s = dict(mix_ts=mix_ts, labels=labels)
+    	t = dict(mix_ts=test_ts, labels=test_labels)
+    if s_or_r:
+        if l_opt:
+            scipy.io.savemat(nametag, s)
+            scipy.io.savemat('test' + nametag, t)
+        else:
+            np.save(nametag, s)
+            np.save('test' + nametag, t)
+    else:
+        if l_opt:
+            return s, t
+        else:
+            return mix_ts, labels
 
 def gaussian(peak, mu, standard_deviation):
     # peak 200, 1
@@ -114,49 +222,57 @@ def stick_pattern():
 
     generate_mix_ts(ts, 'GMM')
 
-#stick_pattern()
+def Brute_force(dataPath, k, threshold, run_time):
+    duration = run_time * 60 * 60
+    start_time = time.time()
+    # Load data with memory mapping
+    data = np.load(dataPath, mmap_mode='r')
 
-#generate_mix_ts()
-#x = scipy.io.loadmat('mix_ts.mat')
-#print(len(x['mix_ts']))
-#y = scipy.io.loadmat('test_ts.mat')
-#print(len(y['mix_ts']))
-"""
-x= np.load('sticks_lib.npy',allow_pickle=True)
-y = np.load('Q_300.npy',allow_pickle=True)
-y = np.reshape(y,(-1,1,1,1))
-for num in range(len(x)):
-    basis = x[num]
-    for (i, peak) in enumerate(basis):
-        print(num,' ',i,' ', peak[0],' ', peak[1])
-print(y)
-"""
-"""
-array = np.arange(1, 21, 1, dtype = float)
-x = np.zeros(20, dtype=float)
-mean = [0,0,0,0,0,6,0,8,0,0,0,0,0,14,0,0,0,0,0,0]
-deviation = [0,0,0,0,0,0.6,0,0.4,0,0,0,0,0,0.6,0,0,0,0,0,0]
-peak = [0,0,0,0,0,-5,0,6.6,0,0,0,0,0,4.4,0,0,0,0,0,0]
-ypoint = np.exp(-((array - 6)**2)/(2*0.6)) * -5
-zpoint = np.exp(-((array - 8)**2)/(2*0.4)) * 6.6
-xpoint = np.exp(-((array - 14)**2)/(2*0.6)) * 4.4
-mpoint = np.exp(-((array - mean)**2)/(np.array(deviation) * 2 + 1e-9)) * peak
-nopoint = zpoint + ypoint + xpoint
-plt.subplot(1, 2, 1)
-plt.plot(array, ypoint, array, zpoint,array, xpoint)
-plt.subplot(1,2,2)
-plt.plot(array, mpoint , array, nopoint)
-plt.show()
-"""
-x = torch.tensor([[[[1],[2],[3]],[[1],[2],[3]]],[[[4],[5],[6]],[[4],[5],[6]]]])
-print(x.size())
-y = torch.tensor([[1,2],[5,6]])
-print(y.size())
-h = x.view(-1,3,1).permute(1,2,0) * y.view((-1))
-h = h.permute(2,0,1).view(2,2,3,1)
-print(h.size())
-print(h)
-#mat = scipy.io.loadmat('psl_NCEP2_C12_1979_2014_73x144_0.8_50_0.8.mat')
-#print(len(mat['AllTs']))
-#print(len(mat['AllTs'][0]))
-#print(mat['AllTs'][0])
+    # Create a range of indices for combinations
+    cb = range(len(data))
+    mlp = []
+    strength = []
+    arr = np.zeros((k, data.shape[1]))
+    st = True
+    print('Start mining multipoles in ' + dataPath)
+    # Iterate over all combinations of k indices
+    for i in itertools.combinations(cb, int(k)):
+        for j in range(k):
+            arr[j] = data[i[j]]
+
+        arr = statm.zscore(arr, axis=1)
+        x = np.transpose(arr)
+        x = np.corrcoef(x, rowvar=False)
+        x = np.nan_to_num(x)
+
+        eigenvalues, eigenvectors = np.linalg.eig(x)
+        min_variance_index = np.argmin(eigenvalues)
+        min_variance_eigenvector = eigenvectors[:, min_variance_index]
+
+        s = 0
+        for j in range(k):
+            s += arr[j] * min_variance_eigenvector[j]
+
+        if np.var(s) <= threshold:
+            mlp.append(i)
+            strength.append(np.var(s))
+
+        # Check if the specified run time has elapsed
+        current_time = time.time()
+        if (current_time - start_time) >= duration:
+            st = False
+            print('Breaking loop due to time constraint.')
+            break
+    # Save the results to a .mat file
+    print('run for %d' % (time.time() - start_time))
+    output = dict(mlp=mlp, strength= strength, finished=st, runTime=(time.time() - start_time))
+    scipy.io.savemat('brute_force_%d.mat' % len(data), output)
+    print('Finished')
+
+base_psl = np.load("base_ts_171_psl.npy", allow_pickle=True)
+base_psl = statm.zscore(base_psl, axis=1)
+base_asv = np.load("base_ts_200_ASV.npy", allow_pickle=True)
+base_asv = statm.zscore(base_asv, axis=1)
+
+generate_train_ts(base_psl, nametag = 'train_cGAN_psl.npy', labels= None, s_or_r = True)
+generate_train_ts(base_asv, nametag = 'train_cGAN_ASV.npy', labels= None, s_or_r = True)

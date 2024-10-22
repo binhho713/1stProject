@@ -13,7 +13,7 @@ import torch
 import time
 import logging
 
-from encoder_psl import *
+from encoder_psl_40 import *
 
 batch_size = 128
 latent_dim = 200
